@@ -339,19 +339,19 @@ def convert_trace(trace:List[MeshPoint]):
     # 把路径转化成归一化坐标点的列表
     ret = []
     for p in trace:
-        ret.append((p.x/mesh_num, p.y/mesh_num, p.z/mesh_num, p.collision_state))
+        ret.append((p.x/mesh_num/a, p.y/mesh_num/b, p.z/mesh_num/c, str(p.collision_state)))
     return ret
 
 def output_trace(trace:List, save_path):
     with open(save_path, 'w') as f:
         for p in trace:
-            f.write(p)
+            f.write(str(p))
             f.write("\n")
 
 if __name__ == '__main__':
-    # 给定一个起点坐标，找到所有目标路径
-    # 如果没有路径就是A类点
-    # 有路径就是B类点
+    # 给定一个起点坐标，某个目标路径
+    # 如果有路径就是A类点
+    # 没有路径就是B类点
 
     # 0.749700010         0.930790007         0.506309986
     # A类孔，横向探索半径1.5A
