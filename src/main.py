@@ -329,11 +329,17 @@ def verify_point(p: Point):
                         if p.is_valid_end_point(start_plane):
                             all_trace.append(get_trace(p))
                             break
+    if len(all_trace)>0:
+        return 'A', all_trace
 
-    # 至此，我们应当已经探索过所有可行的点了
-    # 现在需要检验有没有到达任意其他边界面的点
+    # 不是A类，退而求其次，找碰到过PT的
+    for p in all_visited_points:
+        if p.collision_state==CollisionState.VALID_PT:
+            all_trace.append(get_trace(p))
+            break
+
     mesh.shutdown()    
-    return all_trace
+    return 'B', all_trace
 
 def convert_trace(trace:List[MeshPoint]):
     # 把路径转化成归一化坐标点的列表
@@ -355,29 +361,29 @@ if __name__ == '__main__':
 
     # 0.749700010         0.930790007         0.506309986
     # A类孔，横向探索半径1.5A
-    traces = verify_point(Point(x=0.749700010,y=1,z=0.506309986))
+    hole_type, traces = verify_point(Point(x=0.749700010,y=1,z=0.506309986))
     print(len(traces))
     move_path = convert_trace(traces[0])
     output_trace(move_path, '../data/hole1_path.txt')
 
     # 0.497590005         0.926360011         0.760890007
-    # traces = verify_point(Point(x=0.497590005,y=1,z=0.760890007))
+    # hole_type, traces = verify_point(Point(x=0.497590005,y=1,z=0.760890007))
     # print(len(traces))
 
     # 0.498459995         0.044310000         0.767949998
     # A类孔，横向探索半径1.5A
-    # traces = verify_point(Point(x=0.498459995,y=0,z=0.767949998))
+    # hole_type, traces = verify_point(Point(x=0.498459995,y=0,z=0.767949998))
     # print(len(traces))
 
     # 0.746129990         0.041219998         0.504649997
     # A类孔，横向探索半径1.5A
-    # traces = verify_point(Point(x=0.746129990,y=0,z=0.504649997))
+    # hole_type, traces = verify_point(Point(x=0.746129990,y=0,z=0.504649997))
     # print(len(traces))
 
     # 0.988179982         0.736280024         0.600510001
-    # traces = verify_point(Point(x=1,y=0.736280024,z=0.600510001))
+    # hole_type, traces = verify_point(Point(x=1,y=0.736280024,z=0.600510001))
     # print(len(traces))
 
     # 0.012410000         0.745670021         0.618990004
-    # traces = verify_point(Point(x=0,y=0.745670021,z=0.618990004))
+    # hole_type, traces = verify_point(Point(x=0,y=0.745670021,z=0.618990004))
     # print(len(traces))
