@@ -30,22 +30,24 @@ class Plane(Enum):
     NOT_BOUNDARY = 7
 
 class CollisionState(Enum):
-    VALID = 0 # 可行点，没碰到任何结构原子
-    VALID_PT = 1 # 除了pt没碰到其他任何结构原子
-    INVALID = 2 # 会碰到处PT外的其他结构原子
-
+    INVALID = 0 # 会碰到处PT外的其他结构原子
+    VALID = 1 # 可行点，没碰到任何结构原子
+    SEMI_VALID_PT = 2 # 除了pt没碰到其他任何结构原子，但距离不超过阈值
+    VALID_PT = 3 # 除了pt没碰到其他任何结构原子
+    
+    
 
 class MeshPoint(BaseModel):
     x: int
     y: int
     z: int
-    collision_state: Optional[str]=None
+    collision_state: Optional[CollisionState]=None
     # real_x: Optional[float]=None
     # real_y: Optional[float]=None
     # real_z: Optional[float]=None
     father:MeshPoint=None
     valid_end_point:bool=None
-
+    semi_valid_end_point:bool=None
     # def model_post_init(self, __context):
     #     self.real_x = self.x/mesh_num
     #     self.real_y = self.y/mesh_num
@@ -61,17 +63,17 @@ class MeshPoint(BaseModel):
             return False
         return True
     
-    def is_collision_state_valid(self, mesh:Mesh):
+    def is_collision_state_valid(self, main_dir:Direction, mesh:Mesh):
         if self.collision_state is None:
-            self.collision_state = collision_detection(self, mesh)
+            self.collision_state = collision_detection(self, main_dir, mesh)
         if self.collision_state!=CollisionState.INVALID:
             return True
         return False
 
-    def met_with_pt(self, mesh:Mesh):
+    def met_with_pt(self, main_dir:Direction, mesh:Mesh):
         if self.collision_state is None:
-            self.collision_state = collision_detection(self, mesh.probe_r)
-        if self.collision_state==CollisionState.VALID_PT:
+            self.collision_state = collision_detection(self, main_dir, mesh)
+        if self.collision_state==CollisionState.VALID_PT or self.collision_state==CollisionState.SEMI_VALID_PT:
             return True
         return False
     
@@ -79,11 +81,25 @@ class MeshPoint(BaseModel):
         if self.valid_end_point is not None:
             return self.valid_end_point
         plane, _ = get_start_plane_and_main_direction(self, mesh)
-        if plane!=Plane.NOT_BOUNDARY and plane!=start_plane and self.collision_state==CollisionState.VALID_PT:
+        if plane!=Plane.NOT_BOUNDARY and \
+            plane!=start_plane and \
+            self.collision_state==CollisionState.VALID_PT:
             self.valid_end_point = True
         else:
             self.valid_end_point = False
         return self.valid_end_point
+    
+    def is_semi_valid_end_point(self, start_plane, mesh:Mesh):
+        if self.semi_valid_end_point is not None:
+            return self.semi_valid_end_point
+        plane, _ = get_start_plane_and_main_direction(self, mesh)
+        if plane!=Plane.NOT_BOUNDARY and \
+            plane!=start_plane and \
+            self.collision_state==CollisionState.SEMI_VALID_PT:
+            self.semi_valid_end_point = True
+        else:
+            self.semi_valid_end_point = False
+        return self.semi_valid_end_point
     
     def get_str_rep(self):
         return f"{self.x}_{self.y}_{self.z}"
@@ -109,22 +125,24 @@ class Mesh:
         self.single_direction_delta = list(range(-self.probe_mesh_delta, self.probe_mesh_delta+1)) 
         
         self.structure_atoms = structure_atoms
+        self.min_main_dir_distance = config['min_main_dir_distance']
         # 把归一化坐标转化成真实坐标
         for idx in range(len(self.structure_atoms)):
             self.structure_atoms[idx][0]*=self.a
             self.structure_atoms[idx][1]*=self.b
             self.structure_atoms[idx][2]*=self.c
 
-        self.visited_point = set()
+        self.visited_point = {}
         self.all_points = {}
         self.pbar = tqdm(total=int(self.a*self.b*self.c*self.mesh_num*self.mesh_num*self.mesh_num),
                          desc="visited points")
 
     def visit(self, p:MeshPoint):
-        self.visited_point.add(p.get_str_rep())
+        self.visited_point[p.get_str_rep()]=p.collision_state
     
     def has_visited_before(self, p:MeshPoint):
-        return p.get_str_rep() in self.visited_point
+        point_id = p.get_str_rep()
+        return point_id in self.visited_point and p.collision_state.value<=self.visited_point[point_id].value
     
     def get_mesh_point(self, x, y, z):
         str_rep = f"{x}_{y}_{z}"
@@ -166,7 +184,7 @@ def dedupe_mesh_points(points:List[MeshPoint]):
         ret.append(p)
     return ret
 
-def collision_detection(p:MeshPoint, mesh:Mesh)-> Union[None, str]:
+def collision_detection(p:MeshPoint, main_dir:Direction, mesh:Mesh)-> Union[None, str]:
     # 碰撞检测在真实坐标进行
     x,y,z = p.x/mesh.mesh_num, p.y/mesh.mesh_num, p.z/mesh.mesh_num
     # 给定坐标和半径，看是否与structure_atoms的任意原子有碰撞
@@ -187,6 +205,18 @@ def collision_detection(p:MeshPoint, mesh:Mesh)-> Union[None, str]:
             pt = True
     if valid:
         if pt:
+            if main_dir==Direction.POS_X and x<mesh.min_main_dir_distance:
+                return CollisionState.SEMI_VALID_PT
+            if main_dir==Direction.POS_Y and y<mesh.min_main_dir_distance:
+                return CollisionState.SEMI_VALID_PT
+            if main_dir==Direction.POS_Z and z<mesh.min_main_dir_distance:
+                return CollisionState.SEMI_VALID_PT
+            if main_dir==Direction.NEG_X and x>mesh.a-mesh.min_main_dir_distance:
+                return CollisionState.SEMI_VALID_PT
+            if main_dir==Direction.NEG_Y and y>mesh.b-mesh.min_main_dir_distance:
+                return CollisionState.SEMI_VALID_PT
+            if main_dir==Direction.NEG_Z and z>mesh.c-mesh.min_main_dir_distance:
+                return CollisionState.SEMI_VALID_PT
             return CollisionState.VALID_PT
         else:
             return CollisionState.VALID
@@ -248,27 +278,29 @@ def get_start_plane_and_main_direction(p: MeshPoint, mesh:Mesh)-> Tuple[Plane, D
     return (Plane.NOT_BOUNDARY, Direction.OTHER)
     
 
-def bfs(start_point:MeshPoint, dir:Direction, mesh:Mesh):
+def bfs(start_point:MeshPoint, dir:Direction, mesh:Mesh, main_dir:Direction):
     # 用深度优先搜索找到所有可达的网格点
     points:List[MeshPoint] = []
     if start_point.is_coord_valid(a=mesh.a*mesh.mesh_num,
                                   b=mesh.b*mesh.mesh_num,
-                                  c=mesh.c*mesh.mesh_num) and start_point.is_collision_state_valid(mesh):
+                                  c=mesh.c*mesh.mesh_num) and start_point.is_collision_state_valid(main_dir, mesh):
         points.append(start_point)
     pointer = 0
     while pointer<len(points):
         origin_point = points[pointer]
         point_to_expands = get_points_to_expand(origin_point, dir, mesh)
         for p in point_to_expands:
-            if not mesh.has_visited_before(p) and p.is_collision_state_valid(mesh):
-                # 找到一个可行的点，将其添加到待扩展队列里
-                # 这里还要特别考虑一点是将是否能碰到pt这个信息传递下去
-                if origin_point.met_with_pt(mesh):
-                    p.collision_state = CollisionState.VALID_PT
-                p.father = origin_point
-                points.append(p)
-                # 标记这个点，避免重复访问
-                mesh.visit(p)
+            if p.is_collision_state_valid(main_dir, mesh):
+                if origin_point.collision_state.value>p.collision_state.value:
+                    # 这里还要特别考虑一点是将是否能碰到pt这个信息传递下去
+                    # 如果这条路更好，要覆盖状态
+                    p.collision_state = origin_point.collision_state
+                if not mesh.has_visited_before(p):
+                    # 找到一个可行的点，将其添加到待扩展队列里
+                    p.father = origin_point
+                    points.append(p)
+                    # 标记这个点，避免重复访问
+                    mesh.visit(p)
         # 当前节点扩展完毕
         pointer += 1
     return points   
@@ -288,13 +320,13 @@ def get_trace(p:MeshPoint):
 def verify_point(p: Point, mesh:Mesh):
     # 先新建网格
     start_point = get_nearest_mesh_point(p, mesh)
-    start_point.collision_state = collision_detection(start_point, mesh)
     start_plane, main_dir = get_start_plane_and_main_direction(start_point, mesh)
-
+    start_point.collision_state = collision_detection(start_point, main_dir, mesh)
+    
     all_trace = []
     # 先沿着主方向探索
-    all_visited_points = []
-    main_dir_visited_points = bfs(start_point, main_dir, mesh)
+    all_visited_points:List[MeshPoint] = []
+    main_dir_visited_points = bfs(start_point, main_dir, mesh, main_dir)
     # 判断是否找到合法的终点
     for p in main_dir_visited_points:
         if p.is_valid_end_point(start_plane, mesh):
@@ -312,7 +344,7 @@ def verify_point(p: Point, mesh:Mesh):
             # 其他方向应该从主方向所有探索过的且碰到过pt的点开始
             for p in main_dir_visited_points:
                 if p.collision_state==CollisionState.VALID_PT:
-                    _visited_points = bfs(p, dir, mesh)
+                    _visited_points = bfs(p, dir, mesh, main_dir)
                     all_visited_points.extend(_visited_points)
 
                     for p in _visited_points:
@@ -322,11 +354,11 @@ def verify_point(p: Point, mesh:Mesh):
     if len(all_trace)>0:
         return 'A', all_trace
 
-    # 不是A类，退而求其次，找碰到过PT的
+    # 不是A类，退而求其次，找C 类
     for p in all_visited_points:
-        if p.collision_state==CollisionState.VALID_PT:
+        if p.is_semi_valid_end_point(start_plane, mesh):
             all_trace.append(get_trace(p))
-            break
+            return 'C', all_trace
 
     mesh.shutdown()    
     return 'B', all_trace
@@ -376,4 +408,5 @@ if __name__ == '__main__':
         print(len(traces))
         move_path = convert_trace(traces[0], mesh)
         output_trace(move_path, f'../data/hole_path_{idx}.txt')
+        break
     
