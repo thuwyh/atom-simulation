@@ -1,5 +1,6 @@
 # 参数
 from __future__ import annotations
+from copy import deepcopy
 import json
 from typing import List, Optional, Tuple, Union
 import math
@@ -9,6 +10,7 @@ from tqdm import tqdm
 import sys
 from argparse import ArgumentParser
 import yaml
+from cachetools import cached, LRUCache
 sys.setrecursionlimit(10000)  # Setting the limit to 1500
 
 class Direction(Enum):
@@ -63,17 +65,10 @@ class MeshPoint(BaseModel):
             return False
         return True
     
-    def is_collision_state_valid(self, main_dir:Direction, mesh:Mesh):
-        if self.collision_state is None:
-            self.collision_state = collision_detection(self, main_dir, mesh)
+    def is_collision_state_valid(self):
+        # assert self.collision_state is not None
+            # self.collision_state = collision_detection(self, start_p, main_dir, mesh)
         if self.collision_state!=CollisionState.INVALID:
-            return True
-        return False
-
-    def met_with_pt(self, main_dir:Direction, mesh:Mesh):
-        if self.collision_state is None:
-            self.collision_state = collision_detection(self, main_dir, mesh)
-        if self.collision_state==CollisionState.VALID_PT or self.collision_state==CollisionState.SEMI_VALID_PT:
             return True
         return False
     
@@ -103,10 +98,13 @@ class MeshPoint(BaseModel):
     
     def get_str_rep(self):
         return f"{self.x}_{self.y}_{self.z}"
+    
+    def __hash__(self):
+        return hash((self.x, self.y, self.z))
 
 def load_config(file_path):
     with open(file_path, 'r') as file:
-        config = yaml.safe_load(file)
+        config = json.load(file)
     return config
 
 class Mesh:
@@ -120,12 +118,12 @@ class Mesh:
         self.mesh_num = config['mesh_num']
         self.probe_r = config['probe_r']
         self.mesh_radius = math.sqrt(3)/self.mesh_num # 真实坐标半径
-        self.probe_mesh_delta = math.floor(math.sqrt(self.probe_r*self.mesh_num)) # 网格坐标下在主方向正交平面内横向探索的delta
+        self.probe_mesh_delta = config['probe_mesh_delta'] # 网格坐标下在主方向正交平面内横向探索的delta
         # 先分解成单个方向上的范围，方便后面是用。这样处理后正交平面探索范围是个方形
         self.single_direction_delta = list(range(-self.probe_mesh_delta, self.probe_mesh_delta+1)) 
         
         self.structure_atoms = structure_atoms
-        self.min_main_dir_distance = config['min_main_dir_distance']
+        self.max_plane_distance = config['max_plane_distance']
         # 把归一化坐标转化成真实坐标
         for idx in range(len(self.structure_atoms)):
             self.structure_atoms[idx][0]*=self.a
@@ -184,15 +182,34 @@ def dedupe_mesh_points(points:List[MeshPoint]):
         ret.append(p)
     return ret
 
-def collision_detection(p:MeshPoint, main_dir:Direction, mesh:Mesh)-> Union[None, str]:
+@cached(LRUCache(maxsize=10000))
+def collision_detection(p:MeshPoint, 
+                        start_p:MeshPoint, 
+                        main_dir:Direction, 
+                        mesh:Mesh,
+                        check_plane_distance=False)-> Union[None, str]:
     # 碰撞检测在真实坐标进行
     x,y,z = p.x/mesh.mesh_num, p.y/mesh.mesh_num, p.z/mesh.mesh_num
+    start_x, start_y, start_z = start_p.x/mesh.mesh_num, start_p.y/mesh.mesh_num, start_p.z/mesh.mesh_num
     # 给定坐标和半径，看是否与structure_atoms的任意原子有碰撞
     valid = True
     pt = False
     def distance(x1, y1, z1, x2, y2, z2):
         # print(x1, y1, z1, x2, y2, z2)
         return math.sqrt((x1-x2)*(x1-x2)+(y1-y2)*(y1-y2)+(z1-z2)*(z1-z2))
+    
+    def plane_distance(x1, y1, z1, x2, y2, z2, dir:Direction):
+        # 计算与出发点开始的主方向射线的距离
+        # 两组坐标分别为出发点和当前点
+        if dir in [Direction.POS_X, Direction.NEG_X]:
+            # 计算yz平面距离
+            return distance(0, y1, z1, 0, y2, z2)
+        elif dir in [Direction.POS_Y, Direction.NEG_Y]:
+            # 计算xz平面距离
+            return distance(x1, 0, z1, x2, 0, z2)
+        elif dir in [Direction.POS_Z, Direction.NEG_Z]:
+            # 计算xy平面距离
+            return distance(x1, y1, 0, x2, y2, 0)
 
     for atom in mesh.structure_atoms:
         d = distance(x,y,z, atom[0], atom[1], atom[2])
@@ -205,24 +222,16 @@ def collision_detection(p:MeshPoint, main_dir:Direction, mesh:Mesh)-> Union[None
             pt = True
     if valid:
         if pt:
-            if main_dir==Direction.POS_X and x<mesh.min_main_dir_distance:
-                return CollisionState.SEMI_VALID_PT
-            if main_dir==Direction.POS_Y and y<mesh.min_main_dir_distance:
-                return CollisionState.SEMI_VALID_PT
-            if main_dir==Direction.POS_Z and z<mesh.min_main_dir_distance:
-                return CollisionState.SEMI_VALID_PT
-            if main_dir==Direction.NEG_X and x>mesh.a-mesh.min_main_dir_distance:
-                return CollisionState.SEMI_VALID_PT
-            if main_dir==Direction.NEG_Y and y>mesh.b-mesh.min_main_dir_distance:
-                return CollisionState.SEMI_VALID_PT
-            if main_dir==Direction.NEG_Z and z>mesh.c-mesh.min_main_dir_distance:
-                return CollisionState.SEMI_VALID_PT
+            if check_plane_distance:
+                if plane_distance(x,y,z, start_x, start_y, start_z, dir=main_dir)>=mesh.max_plane_distance:
+                    return CollisionState.SEMI_VALID_PT
             return CollisionState.VALID_PT
         else:
             return CollisionState.VALID
     else:
         return CollisionState.INVALID
 
+@cached(LRUCache(maxsize=10000))
 def get_points_to_expand(p:MeshPoint, dir:Direction, mesh:Mesh) -> List[MeshPoint]:
     def expand(origin_point:MeshPoint, main_pos, main_value, delta_pos1, delta_pos2):
         # 在主方向上往前进1，与主方向正交的平面上扩展至多probe_mesh_delta
@@ -278,19 +287,20 @@ def get_start_plane_and_main_direction(p: MeshPoint, mesh:Mesh)-> Tuple[Plane, D
     return (Plane.NOT_BOUNDARY, Direction.OTHER)
     
 
-def bfs(start_point:MeshPoint, dir:Direction, mesh:Mesh, main_dir:Direction):
+def bfs(start_point:MeshPoint, dir:Direction, mesh:Mesh, main_dir:Direction, check_plane_distance=False):
     # 用深度优先搜索找到所有可达的网格点
     points:List[MeshPoint] = []
     if start_point.is_coord_valid(a=mesh.a*mesh.mesh_num,
                                   b=mesh.b*mesh.mesh_num,
-                                  c=mesh.c*mesh.mesh_num) and start_point.is_collision_state_valid(main_dir, mesh):
+                                  c=mesh.c*mesh.mesh_num) and start_point.is_collision_state_valid():
         points.append(start_point)
     pointer = 0
     while pointer<len(points):
         origin_point = points[pointer]
         point_to_expands = get_points_to_expand(origin_point, dir, mesh)
         for p in point_to_expands:
-            if p.is_collision_state_valid(main_dir, mesh):
+            p.collision_state = collision_detection(p, start_point, main_dir, mesh, check_plane_distance)
+            if p.is_collision_state_valid():
                 if origin_point.collision_state.value>p.collision_state.value:
                     # 这里还要特别考虑一点是将是否能碰到pt这个信息传递下去
                     # 如果这条路更好，要覆盖状态
@@ -318,15 +328,14 @@ def get_trace(p:MeshPoint):
     return [p]
 
 def verify_point(p: Point, mesh:Mesh):
-    # 先新建网格
     start_point = get_nearest_mesh_point(p, mesh)
     start_plane, main_dir = get_start_plane_and_main_direction(start_point, mesh)
-    start_point.collision_state = collision_detection(start_point, main_dir, mesh)
+    start_point.collision_state = collision_detection(start_point, start_point, main_dir, mesh)
     
     all_trace = []
     # 先沿着主方向探索
     all_visited_points:List[MeshPoint] = []
-    main_dir_visited_points = bfs(start_point, main_dir, mesh, main_dir)
+    main_dir_visited_points = bfs(start_point, main_dir, mesh, main_dir, check_plane_distance=True)
     # 判断是否找到合法的终点
     for p in main_dir_visited_points:
         if p.is_valid_end_point(start_plane, mesh):
@@ -344,7 +353,7 @@ def verify_point(p: Point, mesh:Mesh):
             # 其他方向应该从主方向所有探索过的且碰到过pt的点开始
             for p in main_dir_visited_points:
                 if p.collision_state==CollisionState.VALID_PT:
-                    _visited_points = bfs(p, dir, mesh, main_dir)
+                    _visited_points = bfs(p, dir, mesh, main_dir, check_plane_distance=False)
                     all_visited_points.extend(_visited_points)
 
                     for p in _visited_points:
@@ -385,8 +394,8 @@ if __name__ == '__main__':
     parser = ArgumentParser()
     parser.add_argument('--param_path', 
                         type=str, 
-                        default='../data/params.yaml',
-                        help="path of params.yaml")
+                        default='../data/params.json',
+                        help="path of params.json")
     # 注意，这里存储的都是归一化坐标
     parser.add_argument('--atom_path', 
                         type=str, 
@@ -396,17 +405,22 @@ if __name__ == '__main__':
 
     with open(args.atom_path, 'r') as f:
         atom_info = json.load(f)
+
+    config = load_config(args.param_path)
     
-    for idx, start_point in enumerate(atom_info['start_points']):
+    for idx, start_point in enumerate(config['start_points']):
         # 每次先新建一个 mesh
-        mesh = Mesh(args.param_path, atom_info['structure_atoms'])
+        mesh = Mesh(args.param_path, deepcopy(atom_info['structure_atoms']))
         # 验证一个提供的开始点
         hole_type, traces = verify_point(Point(x=start_point[0],
                                                y=start_point[1],
                                                z=start_point[2]),
                                         mesh)
         print(len(traces))
-        move_path = convert_trace(traces[0], mesh)
+        if len(traces)==0:
+            move_path = []
+        else:
+            move_path = convert_trace(traces[0], mesh)
         output_trace(move_path, f'../data/hole_path_{idx}.txt')
-        break
+        
     

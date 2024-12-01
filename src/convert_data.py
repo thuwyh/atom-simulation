@@ -1,3 +1,4 @@
+from copy import deepcopy
 import json
 structure_atoms = []
 with open('../data/atom_pos.txt', 'r') as f:
@@ -20,5 +21,25 @@ structure_atoms = structure_atoms[:-6] # 去掉6个开始点
 with open("../data/new_data.json", 'w') as f:
     json.dump({
         'structure_atoms': structure_atoms,
-        'start_points': start_points
     }, f, indent=2, ensure_ascii=False)
+
+delta_x=0
+delta_y=0
+delta_z=0
+nx=2
+ny=2
+nz=2
+for i in range(nx):
+    for j in range(ny):
+        for k in range(nz):
+            new_structure_atoms = deepcopy(structure_atoms)
+            for idx in range(len(new_structure_atoms)):
+                if new_structure_atoms[idx][3]=='Pt':
+                    new_structure_atoms[idx][0]+=i*delta_x
+                    new_structure_atoms[idx][1]+=j*delta_y
+                    new_structure_atoms[idx][2]+=k*delta_z
+            # save new file
+            with open(f"../data/new_data.json_{i}{j}{k}", 'w') as f:
+                json.dump({
+                    f'structure_atoms': new_structure_atoms,
+                }, f, indent=2, ensure_ascii=False)
