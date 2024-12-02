@@ -243,7 +243,7 @@ def get_points_to_expand(p:MeshPoint, dir:Direction, mesh:Mesh) -> List[MeshPoin
                 delta[delta_pos1] = i
                 delta[delta_pos2] = j
                 new_point = mesh.get_mesh_point(
-                    x = origin_point.x+delta[0],
+                    x=origin_point.x+delta[0],
                     y=origin_point.y+delta[1],
                     z=origin_point.z+delta[2]
                 )
@@ -268,6 +268,15 @@ def get_points_to_expand(p:MeshPoint, dir:Direction, mesh:Mesh) -> List[MeshPoin
     else:
         raise ValueError("wrong direction")
 
+def connected(p1:MeshPoint, p2:MeshPoint):
+    # whether there is a path from p2 to p1
+    cur = p1
+    while True:
+        if cur==p2:
+            return True
+        if cur.father is None:
+            return False
+        cur = cur.father
 
 def get_start_plane_and_main_direction(p: MeshPoint, mesh:Mesh)-> Tuple[Plane, Direction]:
     # 给定起点坐标，判断是从哪个面出发
@@ -305,7 +314,7 @@ def bfs(start_point:MeshPoint, dir:Direction, mesh:Mesh, main_dir:Direction, che
                     # 这里还要特别考虑一点是将是否能碰到pt这个信息传递下去
                     # 如果这条路更好，要覆盖状态
                     p.collision_state = origin_point.collision_state
-                if not mesh.has_visited_before(p):
+                if not mesh.has_visited_before(p) and not connected(origin_point, p):
                     # 找到一个可行的点，将其添加到待扩展队列里
                     p.father = origin_point
                     points.append(p)
@@ -323,9 +332,13 @@ def get_nearest_mesh_point(p:Point,mesh:Mesh) -> MeshPoint:
     return mesh.get_mesh_point(x=mx, y=my, z=mz)
 
 def get_trace(p:MeshPoint):
-    if p.father is not None:
-        return get_trace(p.father)+[p]
-    return [p]
+    trace = []
+    trace.append(p)
+    cur_node = p
+    while cur_node.father is not None:
+        cur_node = cur_node.father
+        trace.append(cur_node)
+    return trace[::-1]
 
 def verify_point(p: Point, mesh:Mesh):
     start_point = get_nearest_mesh_point(p, mesh)
@@ -409,6 +422,8 @@ if __name__ == '__main__':
     config = load_config(args.param_path)
     
     for idx, start_point in enumerate(config['start_points']):
+        print(f"{'-'*10} {idx} {'-'*10}")
+        print(start_point)
         # 每次先新建一个 mesh
         mesh = Mesh(args.param_path, deepcopy(atom_info['structure_atoms']))
         # 验证一个提供的开始点
@@ -416,7 +431,7 @@ if __name__ == '__main__':
                                                y=start_point[1],
                                                z=start_point[2]),
                                         mesh)
-        print(len(traces))
+        print('hole type:', hole_type)
         if len(traces)==0:
             move_path = []
         else:
