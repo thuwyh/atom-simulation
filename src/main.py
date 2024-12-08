@@ -268,6 +268,22 @@ def get_points_to_expand(p:MeshPoint, dir:Direction, mesh:Mesh) -> List[MeshPoin
     else:
         raise ValueError("wrong direction")
 
+def is_main_dir_distance_valid(start_point:MeshPoint, p:MeshPoint, main_dir:Direction):
+    if main_dir==Direction.POS_X:
+        return p.x>=start_point.x
+    elif main_dir==Direction.NEG_X:
+        return p.x<=start_point.x
+    elif main_dir==Direction.POS_Y:
+        return p.y>=start_point.y
+    elif main_dir==Direction.NEG_Y:
+        return p.y<=start_point.y
+    elif main_dir==Direction.POS_Z:
+        return p.z>=start_point.z
+    elif main_dir==Direction.NEG_Z:
+        return p.z<=start_point.z
+    else:
+        raise ValueError("unknown direction")
+
 def connected(p1:MeshPoint, p2:MeshPoint):
     # whether there is a path from p2 to p1
     cur = p1
@@ -296,7 +312,12 @@ def get_start_plane_and_main_direction(p: MeshPoint, mesh:Mesh)-> Tuple[Plane, D
     return (Plane.NOT_BOUNDARY, Direction.OTHER)
     
 
-def bfs(start_point:MeshPoint, dir:Direction, mesh:Mesh, main_dir:Direction, check_plane_distance=False):
+def bfs(start_point:MeshPoint, 
+        dir:Direction, 
+        mesh:Mesh, 
+        main_dir:Direction, 
+        check_plane_distance=False,
+        check_main_dir_distance=False):
     # 用深度优先搜索找到所有可达的网格点
     points:List[MeshPoint] = []
     if start_point.is_coord_valid(a=mesh.a*mesh.mesh_num,
@@ -309,6 +330,8 @@ def bfs(start_point:MeshPoint, dir:Direction, mesh:Mesh, main_dir:Direction, che
         point_to_expands = get_points_to_expand(origin_point, dir, mesh)
         for p in point_to_expands:
             p.collision_state = collision_detection(p, start_point, main_dir, mesh, check_plane_distance)
+            if check_main_dir_distance and not is_main_dir_distance_valid(start_point, p, main_dir):
+                continue
             if p.is_collision_state_valid():
                 if origin_point.collision_state.value>p.collision_state.value:
                     # 这里还要特别考虑一点是将是否能碰到pt这个信息传递下去
@@ -366,7 +389,8 @@ def verify_point(p: Point, mesh:Mesh):
             # 其他方向应该从主方向所有探索过的且碰到过pt的点开始
             for p in main_dir_visited_points:
                 if p.collision_state==CollisionState.VALID_PT:
-                    _visited_points = bfs(p, dir, mesh, main_dir, check_plane_distance=False)
+                    # 第二波探索需要检测点到出发点的主方向距离>=0
+                    _visited_points = bfs(p, dir, mesh, main_dir, check_plane_distance=False, check_main_dir_distance=True)
                     all_visited_points.extend(_visited_points)
 
                     for p in _visited_points:
@@ -382,7 +406,13 @@ def verify_point(p: Point, mesh:Mesh):
             all_trace.append(get_trace(p))
             return 'C', all_trace
 
-    mesh.shutdown()    
+    mesh.shutdown()
+    # output a B type trace
+    for p in all_visited_points:
+        if p.collision_state in [CollisionState.VALID_PT]:
+            if collision_detection(p, start_point, main_dir, mesh, True)==CollisionState.VALID_PT:
+                all_trace.append(get_trace(p))
+                break   
     return 'B', all_trace
 
 def convert_trace(trace:List[MeshPoint], mesh:Mesh):
